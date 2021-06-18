@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31402.337
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StorageAccount.BackgroundProcessing", "StorageAccount.BackgroundProcessing\StorageAccount.BackgroundProcessing.csproj", "{8F9981CE-25B0-4789-A4AB-FB3BC3BA9160}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StorageAccount.Chat", "StorageAccount.Chat\StorageAccount.Chat.csproj", "{D83511B2-E8DC-455A-B80D-55888E0623B1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8F9981CE-25B0-4789-A4AB-FB3BC3BA9160}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8F9981CE-25B0-4789-A4AB-FB3BC3BA9160}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8F9981CE-25B0-4789-A4AB-FB3BC3BA9160}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8F9981CE-25B0-4789-A4AB-FB3BC3BA9160}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D83511B2-E8DC-455A-B80D-55888E0623B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D83511B2-E8DC-455A-B80D-55888E0623B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D83511B2-E8DC-455A-B80D-55888E0623B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D83511B2-E8DC-455A-B80D-55888E0623B1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {CE955BAA-9C2F-448F-B6FA-FA300391FCEF}
+	EndGlobalSection
+EndGlobal

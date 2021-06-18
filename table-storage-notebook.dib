@@ -1,0 +1,265 @@
+#!markdown
+
+## Getting started
+
+First, create an Azure Storage Account using the [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/what-is-azure-cli)
+
+You should also download [Microsoft Azure Storage Explorer](https://azure.microsoft.com/en-us/features/storage-explorer/), which is a fantastic GUI tool to browse storage accounts.
+
+Note: Azure CLI seems to be having trouble with Powershell Interactive, so you for now you might have to copy the following code in Azure Cloud Shell or the terminal of your choice.
+
+![Azure Storage Explorer](assets/azure-storage-explorer.png)
+
+#!pwsh
+
+az login
+az account set --subscription "42f18220-05e1-414c-aca4-03c0dc730751"
+az storage account create
+    \ --name "arpin0storage0test" 
+    \ --resource-group "storage-account-tests"
+    \ --location "eastus"
+    \ --sku "Standard_LRS"
+    \ --kind "StorageV2"
+
+az storage account keys --name "arpin0storage0test"
+
+#!markdown
+
+Then, you can create a new project and install the Nuget Package [`Azure.Storage.Blobs`](https://www.nuget.org/packages/Azure.Storage.Blobs/)
+
+#!csharp
+
+#r "nuget:Azure.Data.Tables"
+#r "nuget:System.Linq.Async"
+#r "nuget:System.Text.Json"
+using Azure;
+using Azure.Data.Tables;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+
+#!markdown
+
+## Creating your first table
+Grab your access key in the first cell's output or you can query it by using `az storage account keys --name "arpin0storage0test"`. A Storage Account always has 2 Access Key which are your "God-Like" Connection String.
+
+For more secure access, you can use a [Shared Access Signature token (SAS Token)](https://docs.microsoft.com/en-us/cli/azure/storage/account?view=azure-cli-latest#az_storage_account_generate_sas) or through [Role-Based Access Policy (RBAC)](https://docs.microsoft.com/en-us/azure/storage/common/storage-auth-aad).
+
+`Azure.Storage.Blobs` is part of the new Azure SDK for .Net which all follow the same pattern/usages:
+- Each Clients is thread safe and meant to be reused
+- Most methods on the Client will return a `Response<T>` which offers both the result and the underlying `HttpResponseMessage`
+- Errors are communicated by throwing a `RequestFailedException`
+- Clients allow for easy mocking if that's what you're into
+
+#!csharp
+
+var storageAccountName = "<storage-account-name>";
+var accessKey = "<access-key>";
+var tableName = "my0first0table";
+
+var credentials = new TableSharedKeyCredential(storageAccountName, accessKey);
+
+var tableClient = new TableClient(new Uri($"https://{storageAccountName}.table.core.windows.net/"), tableName, credentials);
+var response = await tableClient.CreateIfNotExistsAsync();
+
+#!markdown
+
+## Table Entities
+Through the `TableClient`, you can CRUD Entities. The SDK supports 2 different kind of entities
+
+The class `TableEntity` behaves as a dynamic Entity. All of its properties are contained in a `Dictionary<string, object>` and can be accessed by using methods like `GetString(key)`.
+
+You can also create your own class that inherits from `ITableEntity` to have a strongly typed class instead of a dynamic one.
+
+#!csharp
+
+public class Person : ITableEntity
+{
+    /* Required properties for every Table Entity */
+    public string PartitionKey { get; set; }
+    public string RowKey { get; set; }
+    public DateTimeOffset? Timestamp { get; set; }
+    public ETag ETag { get; set; }
+
+    public string Name { get; set; }
+    public DateTime Birthday { get; set; }
+}
+
+#!csharp
+
+var alexandre = new Person
+{
+    PartitionKey = "Marketing",
+    RowKey = "deae47ab-42cb-4acc-9fed-6ffd64cff5f2",
+    Name = "Alexandre",
+    Birthday = new DateTime(1984, 04, 05, 0, 0, 0, DateTimeKind.Utc),
+};
+
+var upsertResult = await tableClient.UpsertEntityAsync(alexandre);
+Console.WriteLine($"Successfuly Upserted TableEntity {alexandre.PartitionKey}/{alexandre.RowKey}");
+
+#!markdown
+
+## Batching (Entity Group Transaction)
+Operations can be combined together by using an "Entity Group Transaction" (EGT).
+
+As long as the transaction all target the same PartitionKey, you can combine up to 100 operations that are less than 4MiB in total size together.
+
+You can combine different operations together, such as Add, Delete and Update.
+
+#!csharp
+
+var benoit = new Person
+{
+    PartitionKey = "Finance",
+    RowKey = "b72e1276-1957-4c04-86ca-146116eca373",
+    Name = "Benoit",
+    Birthday = new DateTime(2005, 01, 03, 0, 0, 0, DateTimeKind.Utc),
+};
+
+var charles = new Person
+{
+    PartitionKey = "Finance",
+    RowKey = "47ba3f41-44ec-42d1-bb1f-95464304a8d0",
+    Name = "Charles",
+    Birthday = new DateTime(1991, 12, 19, 0, 0, 0, DateTimeKind.Utc),
+};
+
+var transaction = new TableTransactionAction[]
+{
+    new TableTransactionAction(TableTransactionActionType.UpsertMerge, benoit),
+    new TableTransactionAction(TableTransactionActionType.UpsertMerge, charles),
+};
+
+var transactionResult = await tableClient.SubmitTransactionAsync(transaction);
+display(transactionResult.Value.Select(x => new { x.Status, x.ReasonPhrase}))
+
+#!markdown
+
+## Querying
+
+`Azure.Data.Tables` offers a very convenient and easy to use syntax for querying data that abstracts most of the OData protocol that is used by Table Storage.
+
+Table Storage supports projections + filtering and leveraging it with `Azure.Data.Tables` is really easy.
+You can provide Server Side filtering as long as the right hand side expression is a constant.
+
+Note that the Azure SDK makes uses of IAsyncEnumerable which makes it easy and convenient to work with lots of data.
+
+#!csharp
+
+// Query all entites
+var persons = await tableClient.QueryAsync<Person>().ToListAsync();
+display(persons);
+
+// Query + Filter + Projection
+var adults = await tableClient.QueryAsync<Person>(
+        x => x.Birthday <= DateTime.UtcNow.Date.AddYears(-18),
+        select: new[] {nameof(Person.Name)})
+    .ToListAsync();
+display(adults);
+
+#!markdown
+
+## Dynamic Table Entity
+In certain scenario, you will be unable or unwilling to create strongly typed classes for your Table Entities.
+
+If that's the case, you can use the class `TableEntity` which gives you a dynamic representation of your entities.
+
+In the event that you have a table that contains multiple entities with different schema or if you'd rather not use a strongly typed TableEntity, you can use `TableEntity` to process records dynamically.
+
+#!csharp
+
+var specialBirthday = new DateTime(1991, 12, 19, 0, 0, 0, DateTimeKind.Utc);
+var denis = new TableEntity(partitionKey: "Security", rowKey: "81ddb200-67a6-4461-bd44-eb4432bac773")
+{
+    {"Name", "Denis"},
+    {"Birthday", specialBirthday},
+};
+
+var denisFirstUpsertResult = await tableClient.UpsertEntityAsync(denis);
+var personsWithSpecialBirthday = await tableClient.QueryAsync<TableEntity>(x => x.GetDateTime("Birthday") == specialBirthday).ToListAsync();
+display(personsWithSpecialBirthday)
+
+#!markdown
+
+What's great about TableEntity is that when you understand how the Table Storage service works, you can use both Dynamic and Static representation of your entity to drive behavior.
+
+In this example I can:
+
+- Add a new property that's not part of the Person class to my Entity
+- Create a OData filter query on the new field
+- Filter on the dynamic field even though I am using the strongly typed model
+
+#!csharp
+
+denis.Add("LastName", "Tremblay");
+
+await tableClient.UpsertEntityAsync(denis);
+
+var tremblayLastNameFilter = TableClient.CreateQueryFilter($"LastName eq 'Tremblay'");
+var allTremblay = await tableClient.QueryAsync<Person>(tremblayLastNameFilter).ToListAsync();
+display(allTremblay)
+
+#!markdown
+
+### Optimistic Concurrency
+Just like Blob storage, each Entity have an ETag that can be used to ensure any operation on the Entity is only applied if the Etag still matches. This practice is called "Optimistic Concurrency".
+
+By default, it uses the `ETag.All` (`*`) value which results in a "Last Write Win" behavior, but if you want to ensure the entity has not been modified between the moment you Read the entity and the moment you're trying to update it, you can use its ETag value to do so.
+
+#!csharp
+
+try
+{
+    await tableClient.UpdateEntityAsync(denis, denisFirstUpsertResult.Headers.ETag!.Value);
+}
+catch (RequestFailedException ex) when (ex.ErrorCode == "UpdateConditionNotSatisfied")
+{
+    // Entity does not have matching Etag on the server, meaning we have an out of date read
+    Console.WriteLine($"Could not update entity because {ex.ErrorCode}");
+}
+
+#!markdown
+
+### Update Type
+
+By default, TableUpdateMode is set to Merge so any unspecified properties remain untouched.
+
+#!csharp
+
+denis.Remove("Name");
+
+await tableClient.UpdateEntityAsync(denis, ETag.All, TableUpdateMode.Merge);
+var denisStillHasAName = await tableClient.QueryAsync<TableEntity>(x => x.GetString("LastName") == "Tremblay").SingleAsync();
+display(denisStillHasAName);
+
+#!markdown
+
+As you can see, even though we removed `Name` from Denis, it's still present in the entity because we used the `Merge` update mode
+
+If however, you set it to Replace, it'll erase all of the unspecified properties.
+
+#!csharp
+
+await tableClient.UpdateEntityAsync(denis, ETag.All, TableUpdateMode.Replace);
+var denisNoName = await tableClient.QueryAsync<TableEntity>(x => x.GetString("LastName") == "Tremblay").SingleAsync();
+display(denisNoName);
+
+#!markdown
+
+You can leverage the merge behavior to update only a subset of the entity without first querying it
+Combined with transactions, you can do some pretty cool stuff!
+
+For instance, if you wanted to add a new "Bonus" field to some entities, if you already have their PartitionKey and RowKey, you can simply create a Merge operation with the PK + RK + Bonus and have it merged to the existing entity, without querying it first.
+
+#!csharp
+
+var financeDepartment = tableClient.QueryAsync<Person>(x => x.PartitionKey == "Finance", select: new[] {"PartitionKey", "RowKey"});
+
+var promoteFinanceDepartmentTransaction = await financeDepartment
+    .Select(x => new TableTransactionAction(TableTransactionActionType.UpdateMerge, new TableEntity(x.PartitionKey, x.RowKey) {{"Bonus", 1000}}, ETag.All))
+    .ToArrayAsync();
+
+await tableClient.SubmitTransactionAsync(promoteFinanceDepartmentTransaction);
+var personsWithBonus = await tableClient.QueryAsync<TableEntity>(x => x.GetInt32("Bonus") > 0).ToListAsync();
+display(personsWithBonus);

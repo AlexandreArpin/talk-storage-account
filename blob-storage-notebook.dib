@@ -1,0 +1,235 @@
+#!markdown
+
+## Getting started
+
+First, create an Azure Storage Account using the [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/what-is-azure-cli)
+
+You should also download [Microsoft Azure Storage Explorer](https://azure.microsoft.com/en-us/features/storage-explorer/), which is a fantastic GUI tool to browse storage accounts.
+
+Note: Azure CLI seems to be having trouble with Powershell Interactive, so you for now you might have to copy the following code in Azure Cloud Shell or the terminal of your choice.
+
+![Azure Storage Explorer](assets/azure-storage-explorer.png)
+
+#!pwsh
+
+az login
+az account set --subscription "42f18220-05e1-414c-aca4-03c0dc730751"
+az storage account create
+    \ --name "arpin0storage0test" 
+    \ --resource-group "storage-account-tests"
+    \ --location "eastus"
+    \ --sku "Standard_LRS"
+    \ --kind "StorageV2"
+
+az storage account keys --name "arpin0storage0test"
+
+#!markdown
+
+Then, you can create a new project and install the Nuget Package [`Azure.Storage.Blobs`](https://www.nuget.org/packages/Azure.Storage.Blobs/)
+
+#!csharp
+
+#r "nuget:Azure.Storage.Blobs"
+#r "nuget:System.Linq.Async"
+#r "nuget:System.Text.Json"
+using Azure;
+using Azure.Storage;
+using Azure.Storage.Shared;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+
+#!markdown
+
+## Creating your first blob container
+Grab your access key in the first cell's output or you can query it by using `az storage account keys --name "arpin0storage0test"`. A Storage Account always has 2 Access Key which are your "God-Like" Connection String.
+
+For more secure access, you can use a [Shared Access Signature token (SAS Token)](https://docs.microsoft.com/en-us/cli/azure/storage/account?view=azure-cli-latest#az_storage_account_generate_sas) or through [Role-Based Access Policy (RBAC)](https://docs.microsoft.com/en-us/azure/storage/common/storage-auth-aad).
+
+`Azure.Storage.Blobs` is part of the new Azure SDK for .Net which all follow the same pattern/usages:
+- Each Clients is thread safe and meant to be reused
+- Most methods on the Client will return a `Response<T>` which offers both the result and the underlying `HttpResponseMessage`
+- Errors are communicated by throwing a `RequestFailedException`
+- Clients allow for easy mocking if that's what you're into
+
+#!csharp
+
+var storageAccountName = "<storage-account-name>";
+var accessKey = "<access-key>";
+var containerName = "my-first-container";
+
+var credentials = new StorageSharedKeyCredential(storageAccountName, accessKey);
+
+var containerClient = new BlobContainerClient(new Uri($"https://{storageAccountName}.blob.core.windows.net/{containerName}"), credentials);
+var response = await containerClient.CreateIfNotExistsAsync();
+
+#!markdown
+
+## Common Blob Operations
+The `BlobContainerClient` allows you to configure and manage a Blob Container but you most commonly use it to for simple Blob Operations (Create/Delete) and for listing the Blobs.
+
+Through the `UploadBlob` method, you can provide your data in many format using `BinaryData`, including `byte[]`, `string`, `Stream` and even `object` that will be serialized to JSON using `System.Text.Json`.
+
+Note that `UploadBlob` throws an exception if the Blob already exists, so just make sure the blob doesn't already exists before uploading.
+
+#!csharp
+
+var textBlobName = "text/my-first-text-blob.txt";
+await containerClient.DeleteBlobIfExistsAsync(textBlobName);
+
+var text = "I am a blob that contains text.";
+var uploadResultText = await containerClient.UploadBlobAsync(textBlobName, BinaryData.FromString(text));
+
+Console.WriteLine($"Uploaded '{textBlobName}' - Last Modified: {uploadResultText.Value.LastModified}" +
+    $" and ETag {string.Join("", uploadResultText.Value.ContentHash.Select(x => x.ToString("X2")))}");
+
+#!csharp
+
+public record Person(string Name, DateTime Birthday);
+
+var jsonBlobName = "json/my-first-json-blob.json";
+await containerClient.DeleteBlobIfExistsAsync(jsonBlobName);
+
+var person = new Person("Alexandre", new DateTime(1989, 03, 16));
+var uploadResultJson = await containerClient.UploadBlobAsync(jsonBlobName, BinaryData.FromObjectAsJson(person));
+
+Console.WriteLine($"Uploaded '{jsonBlobName}' - Last Modified: {uploadResultJson.Value.LastModified}" +
+    $" and ETag {string.Join("", uploadResultJson.Value.ContentHash.Select(x => x.ToString("X2")))}");
+
+#!markdown
+
+You can list blobs either by Hierarchy (folder structure) or Flat. Note that the Azure SDK makes uses of IAsyncEnumerable which makes it easy and convenient to work with lots of data.
+
+#!csharp
+
+var flatBlobs = await containerClient.GetBlobsAsync()
+.Select(x => new { x.Name, x.Properties.LastModified, x.Properties.ContentLength })
+.ToListAsync();
+display(flatBlobs);
+
+var hierachicBlobs = await containerClient.GetBlobsByHierarchyAsync(delimiter: "/")
+.Select(x => new { x.IsPrefix, x.IsBlob, x.Prefix, BlobName = x.Blob?.Name})
+.ToListAsync();
+display(hierachicBlobs);
+
+#!markdown
+
+If you want to download the content of a blob, you'll have to use the `BlobClient`, which is a specialized class that lets you work on a particular blob.
+
+The same `BinaryData` is available to use to allow for symmetric upload/download operations.
+
+#!csharp
+
+var blobClient = containerClient.GetBlobClient(jsonBlobName);
+
+var downloadResult = await blobClient.DownloadContentAsync();
+display(downloadResult.Value.Content.ToObjectFromJson<Person>())
+
+#!markdown
+
+## Advanced Blob Operations
+
+### Metadata
+Blobs can have a Key Value Dictionary of Metadata associated with it, which comes in very handy when you're looking to keep some additional information attached to your blob without impacting the content.
+
+Some common scenarios for Metadata include:
+- Initialization Vector (IV) for encrypted content
+- Type Manifest for binary data (ex: Protobuf)
+- Application Version
+- etc...
+
+You can set the metadata through the `BlobClient.SetMetadata` method or when you use one of the `BlobClient.Upload` operation by passing it as an argument (Look for the `BlobUploadOptions` which lets you configure other upload behaviors as well).
+
+You can get the metadata through the `BlobClient.GetProperties` method or when you use one of the `Download` operations, the `BlobDownloadResult` contains the metadata as well as a bunch of other information. 
+
+#!csharp
+
+var metadata = new Dictionary<string, string>
+{
+    { "ApplicationVersion", "1.0.0-beta" },
+    { "ApplicationType", "Person" },
+};
+
+await blobClient.SetMetadataAsync(metadata);
+var blobProperties = await blobClient.GetPropertiesAsync();
+
+display(blobProperties.Value.Metadata)
+
+#!markdown
+
+### Leases
+
+Leases allow you to lock a Blob to prevent concurrent operations.
+
+You acquire a lease, do a bunch of operations and release the lock.
+
+The happy path is quite simple, but there's a lot of use cases to take into consideration so I highly recommend looking up the [official documentation](https://docs.microsoft.com/en-us/rest/api/storageservices/lease-blob) if you plan on making use of the Lease Api.
+
+Some things to keep in mind and/or help you out
+- When there's a lock contention exception, the current LeaseId and duration is returned by the SDK
+- There's a magic "Break" operation that allows you to remove any lease if things get out of hands
+- You can inspect all of the Lease properties by calling GetProperties on a Blob
+
+#!csharp
+
+var leaseA = $"{Guid.NewGuid()}";
+var leaseB = $"{Guid.NewGuid()}";
+var blobLeaseClient = blobClient.GetBlobLeaseClient(leaseA);
+var anotherBlobLeaseClient = blobClient.GetBlobLeaseClient(leaseB);
+
+var leaseResult = await blobLeaseClient.AcquireAsync(TimeSpan.FromMinutes(1));
+Console.WriteLine($"Acquired Lease {leaseResult.Value.LeaseId}");
+
+await blobClient.SetMetadataAsync(metadata, new BlobRequestConditions(){ LeaseId = leaseA});
+Console.WriteLine($"Updated Metadata with LeaseId {leaseA}");
+
+try
+{
+    await blobClient.SetMetadataAsync(metadata);
+}
+catch(RequestFailedException ex) when (ex.Status == 412)
+{
+    Console.WriteLine($"Could not SetMetadata because provided LeaseId does not match or is missing");
+}
+
+var renewResult = await blobLeaseClient.RenewAsync();
+Console.WriteLine($"Renewed Lease {renewResult.Value.LeaseId}");
+
+var changeResult = await blobLeaseClient.ChangeAsync(leaseB);
+Console.WriteLine($"Transfered Lease to {changeResult.Value.LeaseId}");
+
+var releasedResult = await anotherBlobLeaseClient.ReleaseAsync();
+Console.WriteLine($"Renewed Lease {leaseResult.Value.LeaseId}");
+
+var reacquireResult = await blobLeaseClient.AcquireAsync(TimeSpan.FromMinutes(1));
+Console.WriteLine($"Re-Acquired Lease {reacquireResult.Value.LeaseId}");
+
+var breakResult = await anotherBlobLeaseClient.BreakAsync(TimeSpan.Zero);
+Console.WriteLine($"Broke Lease {breakResult.Value.LeaseId}");
+
+#!markdown
+
+### Tags
+Fresh out of the oven, Azure introduced another Key Value Dictionary that functions exactly like metadata but is meant to be used for indexing purposes.
+
+> Blob index tags categorize data in your storage account using key-value tag attributes. These tags are automatically indexed and exposed as a searchable multi-dimensional index to easily find data.
+
+The syntax is still a bit clunky since it requires to pass SQL expressions to the REST Api, but the concept is very powerful since it allows to search for blobs by values other than its name.
+
+#!csharp
+
+var tags = new Dictionary<string, string>
+{
+    { "TenantId", "59e82cc1-2994-4256-96b9-5a8cf4c19bd6" },
+    { "Project", "Mega Project 2" },
+    { "RetentionDate", "2020-04-20" },
+};
+await blobClient.SetTagsAsync(tags);
+
+var serviceClient = new BlobServiceClient(new Uri($"https://{storageAccountName}.blob.core.windows.net/"), credentials);
+
+var taggedBlobs = await serviceClient.FindBlobsByTagsAsync(@"""RetentionDate"" >= '2020-04-19' AND ""RetentionDate"" <= '2020-04-30'").ToListAsync();
+display(taggedBlobs)
